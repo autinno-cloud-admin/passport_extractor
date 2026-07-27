@@ -213,6 +213,7 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 			display: flex;
 			align-items: center;
 			justify-content: center;
+			position: relative;
 		}
 		#ps-preview {
 			display: none;
@@ -221,6 +222,14 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 			object-fit: contain;
 			border-radius: 10px;
 			background: #edf2f7;
+		}
+		.ps-cropper-container {
+			display: none;
+			width: 100%;
+		}
+		.ps-cropper-container img {
+			max-width: 100%;
+			border-radius: 10px;
 		}
 		.ps-preview-empty {
 			display: block;
@@ -237,6 +246,51 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 			font-size: 13px;
 			font-weight: 600;
 			color: #4b647c;
+		}
+		.ps-crop-controls {
+			display: none;
+			gap: 10px;
+			margin-top: 12px;
+			flex-wrap: wrap;
+		}
+		.ps-crop-controls.active {
+			display: flex;
+		}
+		.ps-crop-btn {
+			flex: 1;
+			min-width: 100px;
+			height: 36px;
+			font-weight: 600;
+			border: none;
+			border-radius: 10px;
+			cursor: pointer;
+			transition: all .2s ease;
+			font-size: 13px;
+		}
+		.ps-crop-btn-apply {
+			background: linear-gradient(90deg, var(--ps-brand), var(--ps-brand-2));
+			color: white;
+			box-shadow: 0 4px 12px rgba(15, 118, 110, 0.24);
+		}
+		.ps-crop-btn-apply:hover {
+			transform: translateY(-1px);
+			box-shadow: 0 6px 16px rgba(15, 118, 110, 0.28);
+		}
+		.ps-crop-btn-cancel {
+			background: #f1f5f9;
+			color: #35506b;
+			border: 1px solid #d8e2ec;
+		}
+		.ps-crop-btn-cancel:hover {
+			background: #e8ecf1;
+		}
+		.ps-crop-btn-rotate {
+			background: #f8fbff;
+			color: #0f766e;
+			border: 1px solid #c8dce8;
+		}
+		.ps-crop-btn-rotate:hover {
+			background: #f2f7fc;
 		}
 		.ps-scan-btn {
 			margin-top: 16px;
@@ -312,8 +366,44 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 		.ps-badge.processing {
 			animation: psPulse 1.5s infinite;
 		}
+		/* Cropper.js overrides */
+		.cropper-canvas,
+		.cropper-drag-box {
+			background-color: rgba(15, 23, 42, 0.6);
+		}
+		.cropper-modal {
+			opacity: 0.6;
+		}
+		.cropper-view-box {
+			outline-color: rgba(15, 118, 110, 0.8);
+			outline-width: 2px;
+		}
+		.cropper-point,
+		.cropper-line {
+			background-color: #0f766e;
+		}
+		.cropper-bg {
+			background-color: transparent;
+		}
+		.cropper-crop-box {
+			border-color: #0f766e;
+		}
+		.cropper-handle {
+			background-color: #0ea5a4;
+			border-color: white;
+		}
 	`;
 	document.head.appendChild(style);
+
+	// Load Cropper.js library
+	const cropperCssUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css";
+	const cropperJsUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js";
+
+	// Add CSS
+	const cropperCssLink = document.createElement("link");
+	cropperCssLink.rel = "stylesheet";
+	cropperCssLink.href = cropperCssUrl;
+	document.head.appendChild(cropperCssLink);
 
 	// Markup
 	$(page.body).html(`
@@ -349,12 +439,27 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 
 					<div class="ps-preview-wrap">
 						<img id="ps-preview" alt="${__("Passport preview")}" />
+						<div class="ps-cropper-container" id="ps-cropper-container">
+							<img id="ps-cropper-image" alt="${__("Cropper")}" />
+						</div>
 						<div class="ps-preview-empty" id="ps-preview-empty">
 							${__("No passport uploaded yet. Please choose a file to preview.")}
 						</div>
 						<div class="ps-preview-fallback" id="ps-preview-fallback">
 							${__("Preview is available for images only. PDF selected.")}
 						</div>
+					</div>
+
+					<div class="ps-crop-controls" id="ps-crop-controls">
+						<button class="ps-crop-btn ps-crop-btn-rotate" id="ps-crop-rotate" title="${__("Rotate 90°")}">
+							↻ ${__("Rotate")}
+						</button>
+						<button class="ps-crop-btn ps-crop-btn-apply" id="ps-crop-apply">
+							${__("Apply Crop")}
+						</button>
+						<button class="ps-crop-btn ps-crop-btn-cancel" id="ps-crop-cancel">
+							${__("Cancel")}
+						</button>
 					</div>
 
 					<button class="btn btn-primary ps-scan-btn" id="ps-scan-btn" disabled>
@@ -376,6 +481,9 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 	// State
 	let selectedFile = null;
 	let uploadedFileUrl = null;
+	let cropper = null;
+	let croppedBlob = null;
+	let isImageCropped = false;
 
 	const $fileInput = $("#ps-file-input");
 	const $preview = $("#ps-preview");
@@ -386,6 +494,12 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 	const $status = $("#ps-status");
 	const $results = $("#ps-results");
 	const $phase = $("#ps-phase");
+	const $cropperContainer = $("#ps-cropper-container");
+	const $cropperImage = $("#ps-cropper-image");
+	const $cropControls = $("#ps-crop-controls");
+	const $cropRotateBtn = $("#ps-crop-rotate");
+	const $cropApplyBtn = $("#ps-crop-apply");
+	const $cropCancelBtn = $("#ps-crop-cancel");
 
 	const FIELD_LABELS = {
 		name: __("Full Name"),
@@ -420,6 +534,69 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 		$results.html(`<div class="ps-empty">${__("Scan a passport to see results here.")}</div>`);
 	}
 
+	function initCropper(imageSrc) {
+		$cropperImage.attr("src", imageSrc);
+		$preview.hide();
+		$previewEmpty.hide();
+		$previewFallback.hide();
+		$cropperContainer.show();
+		$cropControls.addClass("active");
+		setPhase("neutral", __("Crop Image"));
+
+		// Initialize Cropper.js
+		if (cropper) {
+			cropper.destroy();
+		}
+
+		cropper = new Cropper($cropperImage[0], {
+			aspectRatio: NaN,
+			viewMode: 1,
+			autoCropArea: 0.8,
+			responsive: true,
+			guides: true,
+			highlight: true,
+			cropBoxMovable: true,
+			cropBoxResizable: true,
+			toggleDragModeOnDblclick: true,
+			background: true,
+			modal: true,
+		});
+	}
+
+	function destroyCropper() {
+		if (cropper) {
+			cropper.destroy();
+			cropper = null;
+		}
+		$cropperContainer.hide();
+		$cropControls.removeClass("active");
+	}
+
+	function getCroppedImage() {
+		return new Promise((resolve, reject) => {
+			if (!cropper) {
+				reject(new Error("Cropper not initialized"));
+				return;
+			}
+
+			const canvas = cropper.getCroppedCanvas({
+				maxWidth: 4096,
+				maxHeight: 4096,
+				fillColor: "#fff",
+				imageSmoothingEnabled: true,
+				imageSmoothingQuality: "high",
+			});
+
+			canvas.toBlob((blob) => {
+				if (blob) {
+					resolve(blob);
+				} else {
+					reject(new Error("Failed to create cropped image"));
+				}
+			}, selectedFile.type || "image/jpeg", 0.95);
+		});
+	}
+
 	// File selection and preview
 	$fileInput.on("change", function () {
 		const file = this.files && this.files[0];
@@ -427,6 +604,8 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 
 		selectedFile = file;
 		uploadedFileUrl = null;
+		croppedBlob = null;
+		isImageCropped = false;
 		$scanBtn.prop("disabled", false);
 		$status.text(__("File selected. Ready to scan."));
 		setPhase("neutral", __("Ready"));
@@ -438,12 +617,11 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 		if (file.type.startsWith("image/")) {
 			const reader = new FileReader();
 			reader.onload = (e) => {
-				$preview.attr("src", e.target.result).show();
-				$previewEmpty.hide();
-				$previewFallback.hide();
+				initCropper(e.target.result);
 			};
 			reader.readAsDataURL(file);
 		} else {
+			destroyCropper();
 			$preview.hide();
 			$previewEmpty.hide();
 			$previewFallback.show();
@@ -452,11 +630,56 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 		showIdleResult();
 	});
 
+	// Crop rotate
+	$cropRotateBtn.on("click", function () {
+		if (cropper) {
+			cropper.rotate(90);
+		}
+	});
+
+	// Apply crop
+	$cropApplyBtn.on("click", async function () {
+		try {
+			$cropApplyBtn.prop("disabled", true).text(__("Processing..."));
+			croppedBlob = await getCroppedImage();
+			isImageCropped = true;
+
+			// Display cropped image as preview
+			const croppedUrl = URL.createObjectURL(croppedBlob);
+			$preview.attr("src", croppedUrl).show();
+			destroyCropper();
+
+			$cropApplyBtn.prop("disabled", false).text(__("Apply Crop"));
+			setPhase("neutral", __("Ready"));
+			setStatus("success", __("Image cropped successfully. Ready to scan."));
+		} catch (error) {
+			setStatus("error", error.message || __("Failed to crop image"));
+			$cropApplyBtn.prop("disabled", false).text(__("Apply Crop"));
+		}
+	});
+
+	// Cancel crop
+	$cropCancelBtn.on("click", function () {
+		destroyCropper();
+		croppedBlob = null;
+		isImageCropped = false;
+		selectedFile = null;
+		uploadedFileUrl = null;
+		$preview.hide();
+		$previewEmpty.show();
+		$status.text("");
+		setPhase("neutral", __("Ready"));
+	});
+
 	async function uploadSelectedFile() {
 		if (uploadedFileUrl) return uploadedFileUrl;
 
+		// Use cropped blob if available, otherwise use original file
+		const fileToUpload = croppedBlob || selectedFile;
+		const fileName = isImageCropped ? `cropped_${selectedFile.name}` : selectedFile.name;
+
 		const formData = new FormData();
-		formData.append("file", selectedFile, selectedFile.name);
+		formData.append("file", fileToUpload, fileName);
 		formData.append("is_private", "1");
 		formData.append("folder", "Home");
 
@@ -535,4 +758,16 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 
 		$results.html(`<div class="ps-result-grid">${rows}</div>`);
 	}
+
+	// Load Cropper.js script dynamically
+	const script = document.createElement("script");
+	script.src = cropperJsUrl;
+	script.onload = function () {
+		// Cropper.js loaded successfully
+		console.log("Cropper.js library loaded");
+	};
+	script.onerror = function () {
+		console.error("Failed to load Cropper.js library");
+	};
+	document.head.appendChild(script);
 };
