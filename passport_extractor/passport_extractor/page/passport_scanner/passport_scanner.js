@@ -396,8 +396,11 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 	document.head.appendChild(style);
 
 	// Load Cropper.js library
-	const cropperCssUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css";
-	const cropperJsUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js";
+	// const cropperCssUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css";
+	// const cropperJsUrl = "https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js";
+	// after (when you vendor files under passport_extractor/public/...):
+	const cropperCssUrl = "/assets/passport_extractor/css/cropper.min.css";
+	const cropperJsUrl  = "/assets/passport_extractor/js/cropper.min.js";
 
 	// Add CSS
 	const cropperCssLink = document.createElement("link");
@@ -535,6 +538,15 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 	}
 
 	function initCropper(imageSrc) {
+		// If Cropper.js failed to load, fall back to plain preview
+		if (typeof Cropper === "undefined") {
+			setStatus("error", __("Cropper.js not available. Cropping disabled; using preview."));
+			$cropperContainer.hide();
+			$preview.attr("src", imageSrc).show();
+			$previewEmpty.hide();
+			return;
+		}
+
 		$cropperImage.attr("src", imageSrc);
 		$preview.hide();
 		$previewEmpty.hide();
@@ -768,6 +780,9 @@ frappe.pages["passport-scanner"].on_page_load = function (wrapper) {
 	};
 	script.onerror = function () {
 		console.error("Failed to load Cropper.js library");
+		setStatus("error", __("Failed to load Cropper.js library — cropping disabled"));
+		// Ensure crop controls aren't shown
+		destroyCropper();
 	};
 	document.head.appendChild(script);
 };
